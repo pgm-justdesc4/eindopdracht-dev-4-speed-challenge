@@ -1,0 +1,21 @@
+{
+  "name": "speed-challenge",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "tsx server.ts",
+    "build": "next build",
+    "start": "NODE_ENV=production tsx server.ts"
+  },
+  "dependencies": {
+    "next": "16.1.7",
+    "socket.io": "^2.5.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/socket.io": "^2.1.13",
+    "tsx": "^4.21.0",
+    "typescript": "^5"
+  }
+}
