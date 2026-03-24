@@ -13,9 +13,9 @@ app.get('/', (req, res) => res.send('Server online'));
 io.on('connection', (socket) => {
   console.log('Device connected:', socket.id);
 
-  socket.on('ping', (...args) => {
-    console.log('ping received:', JSON.stringify(args));
-    broadcastToTD({ type: 'ping', data: args[0] });
+  socket.on('button_pressed', (...args) => {
+    console.log('button pressed received:', JSON.stringify(args));
+    broadcastToTD({ type: 'button_pressed', data: args[0] });
   });
 
 });
