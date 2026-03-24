@@ -7,6 +7,7 @@
 #define ACTION_BUTTON_PIN 8
 
 SocketIOclient socketIO;
+WiFiManager wm;
 
 #define SERVER_HOST "eindopdracht-dev-4-speed-challenge.onrender.com"
 #define SERVER_PORT 443
@@ -15,10 +16,10 @@ SocketIOclient socketIO;
 void socketIOEvent(socketIOmessageType_t type, uint8_t* payload, size_t length) {
     switch (type) {
         case sIOtype_CONNECT:
-            Serial.println("[SocketIO] Connected to server!");
+            Serial.println("[SocketIO] Connected!");
             break;
         case sIOtype_DISCONNECT:
-            Serial.println("[SocketIO] Disconnected from server!");
+            Serial.println("[SocketIO] Disconnected!");
             break;
         case sIOtype_ERROR:
             Serial.printf("[SocketIO] Error: %s\n", payload);
@@ -47,35 +48,38 @@ void setup() {
 
     pinMode(ACTION_BUTTON_PIN, INPUT_PULLUP);
 
-    WiFiManager wm;
     wm.setConnectTimeout(10);
-    wm.setConfigPortalTimeout(60);
 
-    bool res = wm.autoConnect("Speed Challenge | Start Pilar", "sc-sp-01");
-    if (!res) {
-        Serial.println("Failed — restarting");
-        delay(3000);
-        ESP.restart();
-    }
+    // Portaal blijft altijd aan, geen timeout
+    wm.setConfigPortalTimeout(0);
+    wm.setConfigPortalBlocking(false);
 
-    Serial.println("WiFi connected! IP: " + WiFi.localIP().toString());
+    bool connected = wm.autoConnect("Speed Challenge | Start Pilar", "sc-sp-01");
 
-    // Tijdelijke TCP test
-    WiFiClient client;
-    if (client.connect("192.168.0.107", 3000)) {
-        Serial.println("TCP connectie gelukt!");
-        client.stop();
+    if (connected) {
+        Serial.println("WiFi connected! IP: " + WiFi.localIP().toString());
+        socketIO.beginSSL(SERVER_HOST, SERVER_PORT, SERVER_PATH);
+        socketIO.setReconnectInterval(5000);
+        socketIO.onEvent(socketIOEvent);
     } else {
-        Serial.println("TCP connectie mislukt!");
+        Serial.println("Geen WiFi — portaal actief, wachten...");
     }
-
-    socketIO.beginSSL(SERVER_HOST, SERVER_PORT, SERVER_PATH);
-    socketIO.setReconnectInterval(5000);
-    socketIO.onEvent(socketIOEvent);
 }
 
 void loop() {
-    socketIO.loop();
+    // Verwerkt portaal requests + herverbinding na netwerk wisselen
+    bool justConnected = wm.process();
+
+    if (justConnected) {
+        Serial.println("Verbonden via portaal! IP: " + WiFi.localIP().toString());
+        socketIO.beginSSL(SERVER_HOST, SERVER_PORT, SERVER_PATH);
+        socketIO.setReconnectInterval(5000);
+        socketIO.onEvent(socketIOEvent);
+    }
+
+    if (WiFi.status() == WL_CONNECTED) {
+        socketIO.loop();
+    }
 
     static bool lastState = HIGH;
     static unsigned long lastDebounce = 0;
@@ -87,8 +91,12 @@ void loop() {
     }
 
     if ((millis() - lastDebounce) > 50 && currentState == LOW) {
-        Serial.println("button pressed!");
-        sendButtonPress();
+        if (WiFi.status() == WL_CONNECTED) {
+            Serial.println("button pressed!");
+            sendButtonPress();
+        } else {
+            Serial.println("Knop genegeerd — geen WiFi");
+        }
         delay(300);
     }
 
