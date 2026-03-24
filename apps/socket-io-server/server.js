@@ -15,7 +15,6 @@ io.on('connection', (socket) => {
 
   socket.on('button_pressed', (...args) => {
     console.log('button pressed received:', JSON.stringify(args));
-    broadcastToTD({ type: 'button_pressed', data: args[0] });
   });
 
 });
