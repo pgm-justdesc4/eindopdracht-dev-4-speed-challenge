@@ -1,65 +1,129 @@
+"""
+main.py — Primary application logic for the Speed Challenge race system.
+"""
+
+from datetime import datetime
+import threading
 import time
-from gpiozero import LED
 
-# --- HARDWARE CONFIGURATIE (nieuw schema, zonder breadboard) ---
-# Segmenten: A, B, C, D, E, F, G, DP
-segments_pins = [19, 5, 24, 20, 21, 13, 22, 26]
-# Digits: DIG1, DIG2, DIG3, DIG4
-digit_pins = [25, 6, 12, 16]
+from src.core.networking.socket_io import SocketClient
+from src.core.constants.pins import PIN_FINISH_BUTTON
+from src.core.modules.button import Button
 
-# Initialisatie
-segments = [LED(p) for p in segments_pins]
-digits = [LED(p, active_high=False, initial_value=True) for p in digit_pins]
+from src.functional.high_score_lcd import HighScoreLCD
+from src.functional.race_manager import RaceManager
+from src.functional.race_sounds import RaceSounds
+from src.functional.timer import RaceTimer
 
-# Mapping van cijfers naar segmenten [A, B, C, D, E, F, G, DP]
-num_map = {
-    '0': [1, 1, 1, 1, 1, 1, 0, 0], '1': [0, 1, 1, 0, 0, 0, 0, 0],
-    '2': [1, 1, 0, 1, 1, 0, 1, 0], '3': [1, 1, 1, 1, 0, 0, 1, 0],
-    '4': [0, 1, 1, 0, 0, 1, 1, 0], '5': [1, 0, 1, 1, 0, 1, 1, 0],
-    '6': [1, 0, 1, 1, 1, 1, 1, 0], '7': [1, 1, 1, 0, 0, 0, 0, 0],
-    '8': [1, 1, 1, 1, 1, 1, 1, 0], '9': [1, 1, 1, 1, 0, 1, 1, 0],
-    ' ': [0, 0, 0, 0, 0, 0, 0, 0]
-}
+# Global instances for thread access
+global_timer = None
+current_race_id = None
 
-def display_update(chars):
-    """Toont de karakters en zet de punt op de juiste plek."""
-    for i in range(4):
-        char = chars[i]
-        pattern = list(num_map.get(char, num_map[' ']))
-        
-        # Punt tussen seconden en honderdsten (positie 2 van links)
-        if i == 2:
-            pattern[7] = 1
-            
-        for d in digits: d.off()
-        
-        for j in range(8):
-            if pattern[j] == 1:
-                segments[j].on()
-            else:
-                segments[j].off()
-        
-        digits[i].on()
+client = SocketClient()
+race_manager = RaceManager()
+
+def refresh_loop(timer, stop_event):
+    """Background thread to keep the 7-segment display multiplexing."""
+    while not stop_event.is_set():
+        timer.refresh()
         time.sleep(0.001)
 
-try:
-    print("FINALE RACE TIMER GESTART!")
-    print("Indeling: Seconden . Honderdsten")
-    start_time = time.time()
+def main():
+    global global_timer, current_race_id
     
-    while True:
-        elapsed = time.time() - start_time
-        
-        secs = int(elapsed % 100)
-        honds = int((elapsed * 100) % 100)
-        
-        time_str = f"{secs:02d}{honds:02d}"
-        reversed_str = time_str[::-1]
+    # 1. Setup Socket Connection
+    client.connect()
 
-        for _ in range(5):
-            display_update(list(reversed_str))
+    # 2. Initialize Audio System
+    # SoundController and Pin 4 are now handled internally within RaceSounds
+    race_sounds = RaceSounds()
 
-except KeyboardInterrupt:
-    print("\nTimer gestopt.")
-    for d in digits: d.close()
-    for s in segments: s.close()
+    # 3. Initialize Hardware via Context Managers
+    with RaceTimer() as timer, HighScoreLCD() as hs, Button(PIN_FINISH_BUTTON) as button:
+        
+        global_timer = timer
+        hs.set(race_manager.get_high_score())
+
+        def on_finish_line_crossed():
+            """Handles the logic when the physical finish button is pressed."""
+            global current_race_id
+            
+            # Use current_race_id as a gatekeeper to prevent double-triggers
+            if timer.running and current_race_id is not None:
+                # Capture the current race ID and immediately reset it to prevent re-entry
+                race_to_stop = current_race_id
+                current_race_id = None
+                
+                # Stop hardware timer
+                timer.stop()
+                
+                # Play the 'Ding-Ding-Dinggg' pattern
+                race_sounds.play_finish_bell()
+                
+                # Process race data
+                end_iso = datetime.now().isoformat() + "Z"
+                elapsed_ms = timer.elapsed * 1000
+                
+                # Update records and display
+                race_manager.stop_race(race_to_stop, end_iso, elapsed_ms)
+                hs.set(race_manager.get_high_score())
+                
+                print(f"\n■ FINISH! Race #{race_to_stop} completed: {timer.elapsed:.2f}s")
+                print("> ", end="", flush=True)
+
+        # Assign hardware interrupt for finish line
+        button.on_press(on_finish_line_crossed)
+        
+        # Start background refresh thread for 7-segment display
+        stop_event = threading.Event()
+        thread = threading.Thread(target=refresh_loop, args=(timer, stop_event), daemon=True)
+        thread.start()
+
+        # Handle ESP32 (Start Pillar) events via Socket.IO
+        @client.sio.on("button_pressed")
+        def handle_esp_event(data):
+            global current_race_id
+            if timer.start():
+                start_iso = datetime.now().isoformat() + "Z"
+                current_race_id = race_manager.start_new_race(start_iso)
+                print(f"\n[SocketIO] ▶ Race #{current_race_id} started via ESP32!")
+                print("> ", end="", flush=True)
+
+        print("--- Speed Challenge System Ready ---")
+        print("Commands: 's' (start), 't' (stop), 'r' (reset), 'q' (quit)")
+
+        try:
+            while True:
+                command = input("> ").strip().lower()
+                
+                if command == "s":
+                    if timer.start():
+                        start_iso = datetime.now().isoformat() + "Z"
+                        current_race_id = race_manager.start_new_race(start_iso)
+                        print(f"▶ Manual Start: Race #{current_race_id}")
+                
+                elif command == "t":
+                    print("■ Manual Stop: Time {:.2f}s".format(timer.elapsed))
+                    on_finish_line_crossed()
+
+                elif command == "r":
+                    timer.reset()
+                    current_race_id = None
+                    print("↺ System Reset")
+                
+                elif command == "q":
+                    break
+                    
+                time.sleep(0.1)
+                
+        except KeyboardInterrupt:
+            pass
+        finally:
+            # Shutdown and Cleanup
+            stop_event.set()
+            client.disconnect()
+            race_sounds.cleanup()
+            thread.join(timeout=1)
+
+if __name__ == "__main__":
+    main()

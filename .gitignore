@@ -42,3 +42,6 @@ next-env.d.ts
 node_modules
 dist
 venv/
+__pycache__
+.lgd-nfy0
+.speed-challenge/
