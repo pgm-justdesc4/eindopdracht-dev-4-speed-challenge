@@ -16,8 +16,7 @@ io.on('connection', (socket) => {
   socket.on('button_pressed', (data) => {
     console.log('button pressed received:', JSON.stringify(data));
 
-    // STAP 1: Stuur het bericht door naar IEDEREEN (behalve de afzender)
-    // Gebruik io.emit om het naar alle verbonden clients (zoals de Pi) te sturen
+    // Send the button press event to all clients (including the Pi) using io.emit
     io.emit('button_pressed', data); 
     
     console.log('Broadcasted to all clients');
