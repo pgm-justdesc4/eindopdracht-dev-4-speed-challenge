@@ -1,6 +1,7 @@
 const express = require('express');
 const { createServer } = require('http');
 const socketIO = require('socket.io');
+const path = require('path');
 
 const app = express();
 const httpServer = createServer(app);
@@ -8,18 +9,25 @@ const io = socketIO(httpServer, {
   cors: { origin: '*' }
 });
 
-app.get('/', (req, res) => res.send('Server online'));
+// Serveer het HTML bestand
+app.get('/', (req, res) => {
+  res.sendFile(path.join(__dirname, 'index.html'));
+});
 
 io.on('connection', (socket) => {
   console.log('Device connected:', socket.id);
 
+  // Bestaande button logic
   socket.on('button_pressed', (data) => {
-    console.log('button pressed received:', JSON.stringify(data));
-
-    // Send the button press event to all clients (including the Pi) using io.emit
+    console.log('Button pressed received:', data);
     io.emit('button_pressed', data); 
-    
-    console.log('Broadcasted to all clients');
+  });
+
+  // Nieuwe message logic
+  socket.on('send_message', (message) => {
+    console.log('Message received:', message);
+    // Stuur het bericht door naar iedereen
+    io.emit('new_message', message);
   });
 
   socket.on('disconnect', () => {
@@ -27,9 +35,6 @@ io.on('connection', (socket) => {
   });
 });
 
-app.use((req, res, next) => {
-  console.log('HTTP:', req.method, req.url);
-  next();
+httpServer.listen(3000, '0.0.0.0', () => {
+  console.log('Server running on http://localhost:3000');
 });
-
-httpServer.listen(3000, '0.0.0.0', () => console.log('Server running on port 3000'));

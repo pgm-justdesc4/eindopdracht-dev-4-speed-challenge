@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Socket.io Controller</title>
+    <script src="/socket.io/socket.io.js"></script>
+    <style>
+        body { font-family: sans-serif; padding: 20px; }
+        #messages { border: 1px solid #ccc; height: 200px; overflow-y: scroll; margin-bottom: 10px; padding: 10px; }
+        .controls { display: flex; gap: 10px; }
+    </style>
+</head>
+<body>
+
+    <h2>Socket.io Chat & Control</h2>
+    
+    <div id="messages"></div>
+
+    <div class="controls">
+        <input type="text" id="messageInput" placeholder="Typ een bericht...">
+        <button onclick="sendMessage()">Verstuur</button>
+    </div>
+
+    <hr>
+    <button onclick="pressButton()">Simuleer Button Press</button>
+
+    <script>
+        const socket = io();
+
+        // Ontvang berichten van de server
+        socket.on('new_message', (msg) => {
+            const item = document.createElement('p');
+            item.textContent = `Bericht: ${msg}`;
+            document.getElementById('messages').appendChild(item);
+        });
+
+        // Ontvang button events
+        socket.on('button_pressed', (data) => {
+            console.log('Button was pressed elsewhere:', data);
+        });
+
+        function sendMessage() {
+            const input = document.getElementById('messageInput');
+            if (input.value) {
+                socket.emit('send_message', input.value);
+                input.value = '';
+            }
+        }
+
+        function pressButton() {
+            socket.emit('button_pressed', { timestamp: new Date().getTime() });
+        }
+    </script>
+</body>
+</html>
