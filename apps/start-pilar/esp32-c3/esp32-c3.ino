@@ -9,6 +9,11 @@
 // Pins
 #define LED_STATUS_PIN 8
 #define ACTION_BUTTON_PIN 9
+#define BUTTON_LED_PIN 10 
+
+// LED States
+enum LedState { LED_OFF, LED_ON, LED_PULSE };
+LedState currentLedState = LED_OFF; // Bij opstarten uit
 
 SocketIOclient socketIO;
 WiFiManager wm;
@@ -18,12 +23,42 @@ WiFiManager wm;
 #define SERVER_PATH "/socket.io/?EIO=3"
 
 // NTP instellingen
-const char* ntpServer = "  ";
+const char* ntpServer = "pool.ntp.org";
 const long  gmtOffset_sec = 3600; 
 const int   daylightOffset_sec = 3600; 
 
 unsigned long lastKeepAlive = 0;
 const unsigned long KEEPALIVE_INTERVAL = 300000; 
+
+bool isButtonEnabled = false;
+
+// Functie om de modus te zetten
+void set_btn_led_mode(LedState state) {
+    currentLedState = state;
+    
+    switch (state) {
+        case LED_OFF:
+            isButtonEnabled = false;
+            analogWrite(BUTTON_LED_PIN, 255); // Uit (Active Low)
+            break;
+        case LED_ON:
+            isButtonEnabled = true;           // Klikbaar als hij aan staat
+            analogWrite(BUTTON_LED_PIN, 0);   // Aan (Active Low)
+            break;
+        case LED_PULSE:
+            isButtonEnabled = false;          // Niet klikbaar tijdens pulseren
+            break;
+    }
+}
+
+// Update de pulseer-animatie zonder de code te blokkeren
+void updateLedPulse() {
+    if (currentLedState == LED_PULSE) {
+        float speed = 0.005; 
+        int brightness = (sin(millis() * speed) * 127) + 128;
+        analogWrite(BUTTON_LED_PIN, 255 - brightness); // Active Low correctie
+    }
+}
 
 String getTimestamp() {
     struct tm timeinfo;
@@ -41,14 +76,22 @@ void socketIOEvent(socketIOmessageType_t type, uint8_t* payload, size_t length) 
             Serial.println("[SocketIO] Connected!");
             digitalWrite(LED_STATUS_PIN, LOW); 
             break;
+
+        case sIOtype_EVENT: {
+            String msg = (char*)payload;
+            // Zodra ready ontvangen -> LED vast AAN en knop ENABLED
+            if (msg.indexOf("[end-pilar]-device-ready") != -1) {
+                Serial.println("[SocketIO] Ready signal! LED ON.");
+                set_btn_led_mode(LED_ON);
+            }
+            break;
+        }
+
         case sIOtype_DISCONNECT:
             Serial.println("[SocketIO] Disconnected!");
             digitalWrite(LED_STATUS_PIN, HIGH);  
             break;
-        case sIOtype_ERROR:
-            Serial.printf("[SocketIO] Error: %s\n", payload);
-            digitalWrite(LED_STATUS_PIN, HIGH);
-            break;
+            
         default:
             break;
     }
@@ -59,14 +102,16 @@ void keepAlive() {
         HTTPClient http;
         String url = "https://" + String(SERVER_HOST) + "/";
         http.begin(url);
-        int httpCode = http.GET();
+        http.GET();
         http.end();
         lastKeepAlive = millis();
-        Serial.println("[HTTP] Keep-alive sent");
     }
 }
 
 void sendButtonPress() {
+    // Zodra geklikt -> LED gaat PULSEREN en knop gaat op DISABLED
+    set_btn_led_mode(LED_PULSE);
+
     JsonDocument doc;
     JsonArray array = doc.to<JsonArray>();
     array.add("button_pressed");
@@ -79,44 +124,32 @@ void sendButtonPress() {
     String output;
     serializeJson(doc, output);
     socketIO.sendEVENT(output);
-    Serial.println("[SocketIO] Sent: " + output);
+    Serial.println("[SocketIO] Sent button press, status to PULSE");
 }
 
 void setup() {
     Serial.begin(115200);
     
-    // Pin configuratie
     pinMode(ACTION_BUTTON_PIN, INPUT_PULLUP);
     pinMode(LED_STATUS_PIN, OUTPUT);
+    pinMode(BUTTON_LED_PIN, OUTPUT);
     
-    // Make sure LED is off (active low)
     digitalWrite(LED_STATUS_PIN, HIGH); 
+    
+    // 1. Bij opstarten: UIT
+    set_btn_led_mode(LED_OFF);
 
     wm.setConnectTimeout(10);
     wm.setConfigPortalBlocking(false);
+    wm.autoConnect("Speed Challenge | Start Pilar", "sc-sp-01");
 
-    bool connected = wm.autoConnect("Speed Challenge | Start Pilar", "sc-sp-01");
-
-    if (connected) {
-        configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
-        
-        socketIO.beginSSL(SERVER_HOST, SERVER_PORT, SERVER_PATH);
-        socketIO.setReconnectInterval(5000);
-        socketIO.onEvent(socketIOEvent); 
-        keepAlive();
-    }
+    configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
+    socketIO.beginSSL(SERVER_HOST, SERVER_PORT, SERVER_PATH);
+    socketIO.onEvent(socketIOEvent); 
 }
 
 void loop() {
-    bool justConnected = wm.process();
-
-    if (justConnected) {
-        configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
-        socketIO.beginSSL(SERVER_HOST, SERVER_PORT, SERVER_PATH);
-        socketIO.setReconnectInterval(5000);
-        socketIO.onEvent(socketIOEvent);
-        keepAlive();
-    }
+    wm.process();
 
     if (WiFi.status() == WL_CONNECTED) {
         socketIO.loop();
@@ -124,6 +157,9 @@ void loop() {
             keepAlive();
         }
     }
+
+    // Altijd de puls checken (doet alleen iets in state LED_PULSE)
+    updateLedPulse();
 
     // Button handling
     static bool lastState = HIGH;
@@ -135,11 +171,15 @@ void loop() {
         lastState = currentState;
     }
 
-    if ((millis() - lastDebounce) > 50 && currentState == LOW) {
+    // Alleen actie als de knop 'Enabled' is (dus als de state LED_ON is)
+    if ((millis() - lastDebounce) > 50 && currentState == LOW && isButtonEnabled) {
         if (WiFi.status() == WL_CONNECTED) {
             sendButtonPress();
         }
-        delay(300); 
+        while(digitalRead(ACTION_BUTTON_PIN) == LOW) {
+            updateLedPulse(); // Blijf pulseren terwijl je de knop vasthoudt
+            delay(10);
+        }
     }
-    delay(10);
+    delay(1);
 }
