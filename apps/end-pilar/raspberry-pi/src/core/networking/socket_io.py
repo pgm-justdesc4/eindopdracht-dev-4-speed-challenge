@@ -1,63 +1,85 @@
 """
-src/core/networking/socket_io.py — Socket.IO client for real-time server communication.
+src/core/networking/socket_io.py — Serial bridge for ESP32 communication.
 
-This module handles the persistent connection to the race server, including 
-automatic reconnection logic and background event processing.
-
-Requires:
-    pip install "python-socketio[client]"
-
-Usage:
-    from src.core.networking.socket_io import SocketClient
-
-    client = SocketClient()
-    client.connect()
-    
-    client.sio.emit("event_name", {"data": "value"})
-    
-    client.sio.on("server_event", callback_function)
-    def callback_function(data):
-        print("Received data:", data)
-    
-    client.disconnect()
+This module listens to the Serial port (USB) for events sent by the ESP32,
+mimicking the previous Socket.IO behavior to ensure compatibility with main.py.
 """
 
-import socketio
-
-from src.core.constants.config import SOCKET_SERVER_URL
+import serial
+import threading
+import json
+import time
 
 class SocketClient:
-    def __init__(self):
-        self.server_url = SOCKET_SERVER_URL
-        self.sio = socketio.Client(
-            reconnection=True, 
-            reconnection_attempts=0, 
-            reconnection_delay=5
-        )
-        self._setup_internal_events()
+    def __init__(self, port='/dev/ttyACM0', baudrate=115200):
+        self.port = port
+        self.baudrate = baudrate
+        self.serial_conn = None
+        self.running = False
+        self._thread = None
+        
+        # Mimic the python-socketio 'sio' object to avoid breaking main.py
+        self.sio = type('MockSIO', (), {'on': self._register_callback, 'emit': self._mock_emit})()
+        self.callbacks = {}
 
-    def _setup_internal_events(self):
-        """Sets up the event listeners for connection status."""
-        @self.sio.event
-        def connect():
-            print("\n[SocketIO] Connected to server!")
-            print("> ", end="", flush=True)
+    def _register_callback(self, event_name):
+        """Decorator replacement for @client.sio.on(event)"""
+        def decorator(f):
+            self.callbacks[event_name] = f
+            return f
+        return decorator
 
-        @self.sio.event
-        def disconnect():
-            print("\n[SocketIO] Disconnected from server!")
-            print("> ", end="", flush=True)
+    def _mock_emit(self, event, data):
+        """Optional: send data back to ESP32 if needed"""
+        if self.serial_conn and self.serial_conn.is_open:
+            message = f"SEND:{event}:{json.dumps(data)}\n"
+            self.serial_conn.write(message.encode('utf-8'))
 
     def connect(self):
-        """Start the connection and the background thread (prevents packet queue errors)."""
+        """Initialize the Serial connection and start the background listener."""
         try:
-            self.sio.connect(self.server_url, transports=['websocket'])
-            self.sio.start_background_task(self.sio.wait)
+            # Op Raspberry Pi is de ESP32 meestal /dev/ttyUSB0 of /dev/ttyACM0
+            self.serial_conn = serial.Serial(self.port, self.baudrate, timeout=1)
+            self.running = True
+            self._thread = threading.Thread(target=self._read_loop, daemon=True)
+            self._thread.start()
+            print(f"[Serial] Connected to ESP32 on {self.port}")
             return True
         except Exception as e:
-            print(f"[SocketIO] Error connecting: {e}")
+            print(f"[Serial] Error connecting to ESP32: {e}")
             return False
 
+    def _read_loop(self):
+        """Background thread that parses Serial data from the ESP32."""
+        while self.running:
+            if self.serial_conn and self.serial_conn.in_waiting > 0:
+                try:
+                    line = self.serial_conn.readline().decode('utf-8').strip()
+                    
+                    if line.startswith("DATA:"):
+                        # Formaat ESP32: DATA:["event_name", {"payload": "data"}]
+                        raw_json = line[5:] 
+                        data_list = json.loads(raw_json)
+                        
+                        if isinstance(data_list, list) and len(data_list) >= 1:
+                            event_name = data_list[0]
+                            payload = data_list[1] if len(data_list) > 1 else None
+                            
+                            if event_name in self.callbacks:
+                                self.callbacks[event_name](payload)
+
+                    elif line == "SYSTEM:CONNECTED":
+                        print("\n[ESP32] Socket.IO Connected")
+                    elif line == "SYSTEM:DISCONNECTED":
+                        print("\n[ESP32] Socket.IO Disconnected")
+                        
+                except Exception as e:
+                    print(f"[Serial] Read error: {e}")
+            
+            time.sleep(0.01)
+
     def disconnect(self):
-        if self.sio.connected:
-            self.sio.disconnect()
+        self.running = False
+        if self.serial_conn:
+            self.serial_conn.close()
+        print("[Serial] Disconnected.")

@@ -54,4 +54,29 @@ void setup() {
 void loop() {
     wm.process();
     socketIO.loop();
+
+    // --- Serial to Socket.IO Bridge ---
+    if (Serial.available() > 0) {
+        String input = Serial.readStringUntil('\n');
+        input.trim();
+
+        // Check if the Pi is sending a message via the bridge format
+        // Expected format from Python: SEND:event_name:{"your": "json"}
+        if (input.startsWith("SEND:")) {
+            int firstColon = input.indexOf(':');
+            int secondColon = input.indexOf(':', firstColon + 1);
+            
+            if (secondColon != -1) {
+                String eventName = input.substring(firstColon + 1, secondColon);
+                String payload = input.substring(secondColon + 1);
+
+                // Create the Socket.IO packet: ["event_name", {payload}]
+                String output = "[\"" + eventName + "\"," + payload + "]";
+                socketIO.sendEVENT(output);
+                
+                Serial.print("SYSTEM:FORWARDED_TO_SOCKET:");
+                Serial.println(eventName);
+            }
+        }
+    }
 }

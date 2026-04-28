@@ -14,6 +14,7 @@ from src.functional.high_score_lcd import HighScoreLCD
 from src.functional.race_manager import RaceManager
 from src.functional.race_sounds import RaceSounds
 from src.functional.timer import RaceTimer
+from src.functional.printer_manager import PrinterManager
 
 # Global instances for thread access
 global_timer = None
@@ -28,18 +29,37 @@ def refresh_loop(timer, stop_event):
         timer.refresh()
         time.sleep(0.001)
 
+def heartbeat_loop(client, timer, stop_event):
+    """
+    Sends a 'device-ready' signal every 5 seconds if a race is NOT running.
+    This signal is sent via the Serial bridge to the ESP32.
+    """
+    while not stop_event.is_set():
+        # Only send heartbeat if the timer is not currently running a race
+        if timer and not timer.running:
+            # This triggers the SEND: logic in your SocketClient serial bridge
+            client.sio.emit("send_message", "[end-pilar]-device-ready")
+        
+        # Sleep for 5 seconds total, but check stop_event frequently for clean exit
+        for _ in range(50):
+            if stop_event.is_set():
+                break
+            time.sleep(0.1)
+
 def main():
     global global_timer, current_race_id
     
-    # 1. Setup Socket Connection
+    # 1. Setup Socket Connection (Serial Bridge to ESP32)
     client.connect()
 
     # 2. Initialize Audio System
-    # SoundController and Pin 4 are now handled internally within RaceSounds
     race_sounds = RaceSounds()
 
     # 3. Initialize Hardware via Context Managers
-    with RaceTimer() as timer, HighScoreLCD() as hs, Button(PIN_FINISH_BUTTON) as button:
+    with RaceTimer() as timer, \
+         HighScoreLCD() as hs, \
+         Button(PIN_FINISH_BUTTON) as button, \
+         PrinterManager() as printer:
         
         global_timer = timer
         hs.set(race_manager.get_high_score())
@@ -48,23 +68,19 @@ def main():
             """Handles the logic when the physical finish button is pressed."""
             global current_race_id
             
-            # Use current_race_id as a gatekeeper to prevent double-triggers
             if timer.running and current_race_id is not None:
-                # Capture the current race ID and immediately reset it to prevent re-entry
                 race_to_stop = current_race_id
                 current_race_id = None
                 
-                # Stop hardware timer
                 timer.stop()
-                
-                # Play the 'Ding-Ding-Dinggg' pattern
                 race_sounds.play_finish_bell()
                 
-                # Process race data
                 end_iso = datetime.now().isoformat() + "Z"
                 elapsed_ms = timer.elapsed * 1000
+
+                # Print formatted ticket via the modular printer logic
+                printer.print_speed_result(timer.elapsed)
                 
-                # Update records and display
                 race_manager.stop_race(race_to_stop, end_iso, elapsed_ms)
                 hs.set(race_manager.get_high_score())
                 
@@ -74,12 +90,18 @@ def main():
         # Assign hardware interrupt for finish line
         button.on_press(on_finish_line_crossed)
         
-        # Start background refresh thread for 7-segment display
+        # Setup threads
         stop_event = threading.Event()
-        thread = threading.Thread(target=refresh_loop, args=(timer, stop_event), daemon=True)
-        thread.start()
+        
+        # Thread: 7-segment multiplexing
+        refresh_thread = threading.Thread(target=refresh_loop, args=(timer, stop_event), daemon=True)
+        refresh_thread.start()
 
-        # Handle ESP32 (Start Pillar) events via Socket.IO
+        # Thread: Heartbeat / Ready signal (Every 5 seconds when idle)
+        heartbeat_thread = threading.Thread(target=heartbeat_loop, args=(client, timer, stop_event), daemon=True)
+        heartbeat_thread.start()
+
+        # Handle ESP32 (Start Pillar) events via Serial Bridge
         @client.sio.on("button_pressed")
         def handle_esp_event(data):
             global current_race_id
@@ -103,7 +125,6 @@ def main():
                         print(f"▶ Manual Start: Race #{current_race_id}")
                 
                 elif command == "t":
-                    print("■ Manual Stop: Time {:.2f}s".format(timer.elapsed))
                     on_finish_line_crossed()
 
                 elif command == "r":
@@ -123,7 +144,9 @@ def main():
             stop_event.set()
             client.disconnect()
             race_sounds.cleanup()
-            thread.join(timeout=1)
+            
+            refresh_thread.join(timeout=1)
+            heartbeat_thread.join(timeout=1)
 
 if __name__ == "__main__":
     main()
