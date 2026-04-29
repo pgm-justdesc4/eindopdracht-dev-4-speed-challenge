@@ -5,6 +5,7 @@ main.py — Primary application logic for the Speed Challenge race system.
 from datetime import datetime
 import threading
 import time
+import sys
 
 from src.core.networking.socket_io import SocketClient
 from src.core.constants.pins import PIN_FINISH_BUTTON
@@ -116,7 +117,20 @@ def main():
 
         try:
             while True:
-                command = input("> ").strip().lower()
+                if sys.stdin and sys.stdin.isatty():
+                    try:
+                        while True:
+                            command = input("> ").strip().lower()
+                            if command == 'q':
+                                break
+                            # ... je overige commando logica ...
+                    except EOFError:
+                        pass 
+                else:
+                    # Dit wordt uitgevoerd als de Pi opstart als service
+                    print("Running in background mode...")
+                    while True:
+                        time.sleep(10) # Houdt het script in leven zonder CPU te belasten
                 
                 if command == "s":
                     if timer.start():
