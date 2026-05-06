@@ -1,5 +1,6 @@
-from datetime import datetime
 from src.core.modules.printer import PrinterCore
+from src.data.facts import Facts
+from datetime import datetime
 
 class PrinterManager:
     """
@@ -8,7 +9,7 @@ class PrinterManager:
     def __init__(self):
         self.printer = PrinterCore()
 
-    def print_speed_result(self, elapsed_time: float): # Rename this to match main.py
+    def print_speed_result(self, elapsed_time: float):
         """
         Formats a receipt based on the provided elapsed time.
         """
@@ -21,6 +22,9 @@ class PrinterManager:
         receipt += "\n--------------------------------\n"
         receipt += f"  DATE: {datetime.now().strftime('%Y-%m-%d %H:%M')}\n"
         receipt += "================================\n\n\n"
+
+        receipt += "Did you know?\n\n"
+        receipt += f"{Facts.get_random_fact()}\n"
 
         success = self.printer.write(receipt)
         if success:
