@@ -15,7 +15,11 @@ app.get('/', (req, res) => {
 });
 
 io.on('connection', (socket) => {
-  console.log('Device connected:', socket.id);
+  console.log('Device connected:', {
+    id: socket.id,
+    handshake: socket.handshake,
+    time: new Date().toISOString()
+  });
 
   // Bestaande button logic
   socket.on('button_pressed', (data) => {
