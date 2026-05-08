@@ -17,8 +17,7 @@ app.get('/', (req, res) => {
 io.on('connection', (socket) => {
   console.log('Device connected:', {
     id: socket.id,
-    handshake: socket.handshake,
-    time: new Date().toISOString()
+    "x-client-name": socket.handshake.headers['x-client-name'] || 'Unknown',
   });
 
   // Bestaande button logic
