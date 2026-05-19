@@ -16,6 +16,7 @@ from src.functional.high_score_lcd import HighScoreLCD
 from src.functional.race_manager import RaceManager
 from src.functional.race_sounds import RaceSounds
 from src.functional.timer import RaceTimer
+from src.core.system.storage import Storage
 
 # Global instances for thread access
 global_timer = None
@@ -50,7 +51,11 @@ def main():
     # 2. Initialize Audio System
     race_sounds = RaceSounds()
 
-    # 3. Initialize Hardware via Context Managers
+    # 3. Clear high score
+    storage = Storage()
+    storage.save("races.json", [])
+
+    # 4. Initialize Hardware via Context Managers
     # We voegen de LED op pin 17 toe aan de Button constructor
     with RaceTimer() as timer, \
          HighScoreLCD() as hs, \
