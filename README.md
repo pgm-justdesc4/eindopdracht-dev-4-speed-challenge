@@ -4,12 +4,12 @@ An IoT installation combining running, competition and athletics trivia. Users r
 
 # Tech Stack
 
-## Software
+### Software
 - C++ (.ino)
 - Python
 - Socket.io
 
-## Hardware
+### Hardware
 - Raspberry Pi
 - ESP32 C3 (2x)
 - Arcade buttons (2x)
